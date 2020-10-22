@@ -90,7 +90,7 @@ export interface DataPoint {
 const IS_FIREFOX = navigator.userAgent.toLowerCase().indexOf('firefox') >= 0;
 /** Controls whether nearest neighbors computation is done on the GPU or CPU. */
 export const TSNE_SAMPLE_SIZE = 10000;
-export const UMAP_SAMPLE_SIZE = 5000;
+export const UMAP_SAMPLE_SIZE = 500;
 export const PCA_SAMPLE_SIZE = 50000;
 /** Number of dimensions to sample when doing approximate PCA. */
 export const PCA_SAMPLE_DIM = 200;
@@ -372,80 +372,47 @@ export class DataSet {
   async projectUmap(
     nComponents: number,
     nNeighbors: number,
-    stepCallback: (iter: number) => void
+    stepCallback: (iter: number, bg:string) => void
   ) {
-    this.hasUmapRun = true;
-    this.umap = new UMAP({nComponents, nNeighbors});
-    let currentEpoch = 0;
-    const epochStepSize = 10;
-    const sampledIndices = this.shuffledDataIndices.slice(0, UMAP_SAMPLE_SIZE);
-    const sampledData = sampledIndices.map((i) => this.points[i]);
-    // TODO: Switch to a Float32-based UMAP internal
-    const X = sampledData.map((x) => Array.from(x.vector));
-    const nearest = await this.computeKnn(sampledData, nNeighbors);
-    const nEpochs = await util.runAsyncTask(
-      'Initializing UMAP...',
-      () => {
-        const knnIndices = nearest.map((row) =>
-          row.map((entry) => entry.index)
-        );
-        const knnDistances = nearest.map((row) =>
-          row.map((entry) => entry.dist)
-        );
-        // Initialize UMAP and return the number of epochs.
-        this.umap.setPrecomputedKNN(knnIndices, knnDistances);
-        return this.umap.initializeFit(X);
-      },
-      UMAP_MSG_ID
-    );
-    // Now, iterate through all epoch batches of the UMAP optimization, updating
-    // the modal window with the progress rather than animating each step since
-    // the UMAP animation is not nearly as informative as t-SNE.
+       this.hasUmapRun = true;
+       this.umap = new UMAP({nComponents, nNeighbors});
+       let currentEpoch = 0;
+       const sampledIndices = this.shuffledDataIndices.slice(0, UMAP_SAMPLE_SIZE);
+       const sampledData = sampledIndices.map((i) => this.points[i]);
+
+       let headers = new Headers();
+       headers.append('Content-Type', 'application/json');
+       headers.append('Accept', 'application/json');
+
+       const result_bg = await fetch("http://192.168.1.115:5000/visualize", {
+         method: 'POST',
+         body: JSON.stringify({"sampled_data": sampledData}),
+         headers: headers,
+         mode: 'cors'
+       }).then(response => response.json()).then(data => [data.result, data.bg]);
+       const result = result_bg[0];
+       const bg = 'data:image/png;base64,'+result_bg[1];
+
+
     return new Promise((resolve, reject) => {
-      const step = () => {
-        // Compute a batch of epochs since we don't want to update the UI
-        // on every epoch.
-        const epochsBatch = Math.min(epochStepSize, nEpochs - currentEpoch);
-        for (let i = 0; i < epochsBatch; i++) {
-          currentEpoch = this.umap.step();
-        }
-        const progressMsg = `Optimizing UMAP (epoch ${currentEpoch} of ${nEpochs})`;
-        // Wrap the logic in a util.runAsyncTask in order to correctly update
-        // the modal with the progress of the optimization.
-        util
-          .runAsyncTask(
-            progressMsg,
-            () => {
-              if (currentEpoch < nEpochs) {
-                requestAnimationFrame(step);
-              } else {
-                const result = this.umap.getEmbedding();
-                sampledIndices.forEach((index, i) => {
+      util.runAsyncTask(`Updating`, () => {
+        sampledIndices.forEach((index, i) => {
                   const dataPoint = this.points[index];
                   dataPoint.projections['umap-0'] = result[i][0];
                   dataPoint.projections['umap-1'] = result[i][1];
                   if (nComponents === 3) {
-                    dataPoint.projections['umap-2'] = result[i][2];
+                    //dataPoint.projections['umap-2'] = result[i][2];
+                    dataPoint.projections['umap-2'] = 0;
                   }
                 });
                 this.projections['umap'] = true;
                 logging.setModalMessage(null, UMAP_MSG_ID);
                 this.hasUmapRun = true;
-                stepCallback(currentEpoch);
+                stepCallback(currentEpoch, bg);
                 resolve();
-              }
-            },
-            UMAP_MSG_ID,
-            0
-          )
-          .catch((error) => {
-            logging.setModalMessage(null, UMAP_MSG_ID);
-            reject(error);
-          });
-      };
-      requestAnimationFrame(step);
+      });
     });
-  }
+  };
   /** Computes KNN to provide to the UMAP and t-SNE algorithms. */
   private async computeKnn(
     data: DataPoint[],

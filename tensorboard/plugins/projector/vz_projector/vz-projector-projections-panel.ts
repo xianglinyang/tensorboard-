@@ -527,10 +527,10 @@ class ProjectionsPanel extends LegacyElementMixin(PolymerElement) {
     this.runUmapButton.disabled = true;
     const nComponents = this.umapIs3d ? 3 : 2;
     const nNeighbors = this.umapNeighbors;
-    this.dataSet.projectUmap(nComponents, nNeighbors, (iteration: number) => {
+    this.dataSet.projectUmap(nComponents, nNeighbors, (iteration: number, bg: string) => {
       if (iteration != null) {
         this.runUmapButton.disabled = false;
-        this.projector.notifyProjectionPositionsUpdated();
+        this.projector.notifyProjectionPositionsUpdated(bg);
         if (!projectionChangeNotified && this.dataSet.projections['umap']) {
           this.projector.onProjectionChanged();
           projectionChangeNotified = true;
